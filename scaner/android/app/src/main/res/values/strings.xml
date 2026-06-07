@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">詐騙連結掃描</string>
+    <string name="accessibility_service_description">在您瀏覽社群媒體時，自動偵測畫面上的可疑連結與假訊息，並透過懸浮視窗即時提醒。不會讀取個人資訊或私訊內容。</string>
+</resources>

@@ -5,6 +5,8 @@ class URLScanResult {
   final Map<String, double> checks;
   final String? aiAnalysis;
   final double? aiRiskScore;
+  final bool isTrustedDomain;
+  final String? trustedDomainLabel;
 
   URLScanResult({
     required this.riskScore,
@@ -13,6 +15,8 @@ class URLScanResult {
     required this.checks,
     this.aiAnalysis,
     this.aiRiskScore,
+    this.isTrustedDomain = false,
+    this.trustedDomainLabel,
   });
 }
 
@@ -55,6 +59,64 @@ class URLScannerService {
     't.co', 'rb.gy', 'cutt.ly', 'shorte.st',
     'adf.ly', 'bc.vc', 'u.to', 'cli.gs',
     'dfen.in', 'gg.gg', 'v.gd', 'soo.gd',
+  ];
+
+  // Trusted domains — exact match or subdomain only
+  static const Map<String, String> _trustedDomainMap = {
+    // Taiwan government
+    'president.gov.tw': '總統府',
+    'moj.gov.tw': '法務部',
+    'police.gov.tw': '警政署',
+    'cdc.gov.tw': '疾病管制署',
+    'mohw.gov.tw': '衛生福利部',
+    'moe.edu.tw': '教育部',
+    'fia.gov.tw': '金融監督管理委員會',
+    // Taiwan banks
+    'ctbcbank.com': '中信銀行',
+    'esunbank.com': '玉山銀行',
+    'bot.com.tw': '臺灣銀行',
+    'megabank.com.tw': '兆豐銀行',
+    'landbank.com.tw': '土地銀行',
+    'firstbank.com.tw': '第一銀行',
+    'taishinbank.com.tw': '台新銀行',
+    'sinopac.com': '永豐銀行',
+    'bok.com.tw': '高雄銀行',
+    'hncb.com.tw': '華南銀行',
+    'tcb-bank.com.tw': '合作金庫',
+    'cathaybank.com.tw': '國泰世華銀行',
+    'yuantabank.com.tw': '元大銀行',
+    'ubot.com.tw': '聯邦銀行',
+    'entiebank.com.tw': '安泰銀行',
+    // Taiwan major media
+    'udn.com': '聯合新聞網',
+    'chinatimes.com': '中時媒體',
+    'ltn.com.tw': '自由時報',
+    'ettoday.net': 'ETtoday',
+    'setn.com': '三立新聞',
+    'tvbs.com.tw': 'TVBS',
+    'cts.com.tw': '中視',
+    'pts.org.tw': '公視',
+    'storm.mg': '風傳媒',
+    'ithome.com.tw': 'iThome',
+    'technews.tw': 'TechNews',
+    // International credible
+    'bbc.com': 'BBC',
+    'reuters.com': 'Reuters',
+    'ap.org': 'AP通訊',
+    'nytimes.com': 'NYT',
+    'who.int': 'WHO',
+    'cdc.gov': 'US CDC',
+    // Fact-checking
+    'factcheck.tw': '台灣事實查核中心',
+    'cofacts.tw': 'Cofacts真的假的',
+    'mygopen.com': 'MyGoPen',
+  };
+
+  static const List<String> _sensationalUrlKeywords = [
+    'shocking', 'secret', 'truth', 'revealed', 'exposed', 'hidden',
+    'suppressed', 'forbidden', 'leaked', 'scandal', 'bombshell',
+    'banned', 'censored', 'conspiracy',
+    '震驚', '曝光', '內幕', '秘密', '真相', '驚天', '黑幕', '封鎖',
   ];
 
   static const List<String> _phishingKeywords = [
@@ -218,6 +280,26 @@ class URLScannerService {
       riskScore += 0.25;
     }
 
+    // 13. Sensational / fake-news keywords in URL path & query
+    final sensationalScore = _checkSensationalKeywords(uri.path + uri.query);
+    checks['聳動關鍵字'] = sensationalScore;
+    if (sensationalScore > 0) {
+      warnings.add('URL 包含假新聞常見聳動詞彙');
+      riskScore += 0.15;
+    }
+
+    // 14. Trusted domain check — applied last to reduce false positives
+    bool isTrustedDomain = false;
+    String? trustedLabel;
+    final trustedResult = _checkTrustedDomain(host);
+    if (trustedResult != null) {
+      isTrustedDomain = true;
+      trustedLabel = trustedResult;
+      warnings.removeWhere((w) => w.contains('釣魚常用詞') || w.contains('品牌冒充'));
+      warnings.add('此網域為已知可信任網站（$trustedLabel）');
+      riskScore = (riskScore - 0.45).clamp(0.0, 1.0);
+    }
+
     riskScore = riskScore.clamp(0.0, 1.0);
     riskScore = double.parse(riskScore.toStringAsFixed(2));
 
@@ -241,6 +323,8 @@ class URLScannerService {
       verdict: verdict,
       warnings: warnings,
       checks: checks,
+      isTrustedDomain: isTrustedDomain,
+      trustedDomainLabel: trustedLabel,
     );
   }
 
@@ -451,5 +535,30 @@ class URLScannerService {
     if (cyrillic.hasMatch(host) && latinSimilar.hasMatch(host)) return 0.7;
 
     return 0.0;
+  }
+
+  double _checkSensationalKeywords(String pathAndQuery) {
+    if (pathAndQuery.isEmpty) return 0.0;
+    final lower = pathAndQuery.toLowerCase();
+    int count = 0;
+    for (final kw in _sensationalUrlKeywords) {
+      if (lower.contains(kw.toLowerCase())) count++;
+    }
+    return (count / 3).clamp(0.0, 1.0);
+  }
+
+  /// Returns a label if host is a trusted domain, null otherwise.
+  /// Only matches exact domain or its subdomain (e.g. sub.gov.tw matches gov.tw).
+  String? _checkTrustedDomain(String host) {
+    if (host.endsWith('.gov.tw') || host == 'gov.tw') return '\u53F0\u7063\u653F\u5E9C\u6A5F\u95DC';
+    if (host.endsWith('.edu.tw') || host == 'edu.tw') return '\u53F0\u7063\u6559\u80B2\u6A5F\u69CB';
+
+    for (final entry in _trustedDomainMap.entries) {
+      final d = entry.key;
+      if (host == d || host.endsWith('.$d')) {
+        return entry.value;
+      }
+    }
+    return null;
   }
 }
